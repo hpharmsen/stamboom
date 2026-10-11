@@ -152,6 +152,9 @@ body.fan-full { overflow: hidden; }
 .card .c-r { font-family: var(--mono); font-size: 9.5px; letter-spacing: .08em; text-transform: uppercase; color: var(--ink-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .card .c-n { font-family: var(--serif); font-weight: 600; font-size: 15px; line-height: 1.2; margin: 3px 0 2px; }
 .card .c-d { font-family: var(--mono); font-size: 11px; color: var(--ink-2); }
+.card.anc { background: color-mix(in srgb, var(--kc) 11%, var(--card)); border-color: color-mix(in srgb, var(--kc) 45%, var(--rule)); }
+.card .c-r b { font-weight: 500; color: var(--kc); }
+.card.focus .c-r { white-space: normal; line-height: 1.4; }
 .card.focus { width: 250px; margin-left: -125px; min-height: 120px; margin-top: -60px; padding: 14px 16px 14px 20px; border-color: var(--ink-3); cursor: default; }
 .card.focus .c-n { font-family: var(--display); font-size: 25px; line-height: 1.05; }
 .card.focus .c-open { margin-top: 8px; font-family: var(--mono); font-size: 10.5px; letter-spacing: .08em; text-transform: uppercase; color: var(--accent); background: none; border: 0; padding: 0; cursor: pointer; }
@@ -2446,6 +2449,7 @@ function pathTo(target, blood) {
   return path;
 }
 const pick = (pair, sex) => pair.split('|')[sex === 'm' ? 0 : 1];
+const KIN_ANC = x => pick(ANC_TERMS[genOf(sosa[x])] || 'voorvader|voormoeder', P[x].sex);
 function kinship(id) {
   const p = P[id];
   if (id === ROOT) return `${ME_CALL} zelf`;
@@ -2454,10 +2458,13 @@ function kinship(id) {
   if (b) {
     const g = b.findIndex(s => s.r === 'down'), k = b.length - g;
     if (g > 0 && b.slice(g).every(s => s.r === 'down')) {
-      const T = {'1,1': 'broer|zus', '2,1': 'oom|tante', '3,1': 'oudoom|oudtante', '4,1': 'overoudoom|overoudtante', '1,2': 'neef|nicht', '2,2': 'volle neef|volle nicht'};
+      const T = {'1,1': 'broer|zus', '2,1': 'oom|tante', '1,2': 'neef|nicht', '2,2': 'volle neef|volle nicht'};
       if (T[`${g},${k}`]) return pick(T[`${g},${k}`], p.sex);
-      const a = b[g - 1].to;
-      return `${p.sex === 'm' ? 'bloedverwant' : 'bloedverwante'} via ${shortName(P[a].name, 24)}`;
+      // further away: name the ancestor it runs through, e.g. "broer van Elizabeth Tom (oudmoeder)"
+      const anc = x => `${shortName(P[x].name, 26)} (${KIN_ANC(x)})`, sib = b[g - 2].to, top = b[g - 1].to;
+      if (k === 1) return `${pick('broer|zus', p.sex)} van ${anc(sib)}`;
+      if (k === 2) return `${pick('zoon|dochter', p.sex)} van een broer of zus van ${anc(sib)}`;
+      return `${pick('afstammeling|afstammelinge', p.sex)} van ${anc(top)}`;
     }
   }
   const any = pathTo(id, false);
@@ -2706,7 +2713,7 @@ function cardHTML(node) {
   if (node.ghost) return `<div class="c-r">${esc(node.role)}</div><div class="c-n">${esc(node.label)}</div>${node.note ? `<div class="c-d">${esc(node.note.slice(0, 60))}</div>` : ''}`;
   const p = P[node.id], focus = node.id === famFocus;
   return `<span class="dot l${level(p.status)}" title="${LEVELS[level(p.status)]}"></span>
-    <div class="c-r">${esc(node.role || KIN[node.id])}</div>
+    <div class="c-r" title="${esc(node.role || KIN[node.id])}${sosa[node.id] && node.role && !focus ? ' · ' + esc(KIN[node.id]) : ''}">${esc(node.role || KIN[node.id])}${sosa[node.id] && node.role && !focus ? ` · <b>${esc(KIN[node.id])}</b>` : ''}</div>
     <div class="c-n">${esc(focus ? p.name : shortName(p.name, 40))}</div>
     <div class="c-d">${esc(lifespan(p))}</div>
     ${focus ? `${p.job ? `<div class="c-d" style="font-family:var(--serif);font-style:italic;margin-top:4px">${esc(p.job.split(/[;(]/)[0])}</div>` : ''}<button class="c-open">Open dossier →</button>` : ''}`;
@@ -2739,11 +2746,19 @@ function familyLayout(f) {
   const sibs = [...new Set([...(father ? childrenOf(father) : []), ...(mother ? childrenOf(mother) : [])])].filter(x => x !== f)
     .sort((a, b) => (P[a].by || 0) - (P[b].by || 0));
   add({key: f, id: f, x: 0, y: 0, focus: true, role: KIN[f]});
-  sibs.forEach((s, i) => add({key: s, id: s, x: -(focusW / 2 + 20 + W / 2) - i * W, y: 0, role: P[s].sex === 'm' ? 'broer' : 'zus'}));
-  const lineY = -85, leftmost = sibs.length ? -(focusW / 2 + 20 + W / 2) - (sibs.length - 1) * W : 0;
+  // siblings fill rows of PER_ROW to the left of the focus, each extra row hangs from a trunk next to the focus
+  const PER_ROW = 4, RH = 130, sibX = c => -(focusW / 2 + 20 + W / 2) - c * W, trunkX = -(focusW / 2 + 10), lineY = -85;
+  sibs.forEach((s, i) => add({key: s, id: s, x: sibX(i % PER_ROW), y: Math.floor(i / PER_ROW) * RH, role: P[s].sex === 'm' ? 'broer' : 'zus'}));
+  const rows = Math.ceil(sibs.length / PER_ROW);
   links.push({d: `M0,-170V${lineY}`, cls: father || mother ? '' : 'ghostlink'});
-  if (sibs.length) links.push({d: `M${leftmost},-43V${lineY}H0V-60`, cls: ''}); else links.push({d: `M0,${lineY}V-60`, cls: ''});
-  sibs.forEach((s, i) => i < sibs.length - 1 && links.push({d: `M${-(focusW / 2 + 20 + W / 2) - i * W},${lineY}V-43`, cls: ''}));
+  links.push({d: `M0,${lineY}V-60`, cls: ''});
+  for (let r = 0; r < rows; r++) {
+    const n = Math.min(PER_ROW, sibs.length - r * PER_ROW), busY = r ? r * RH - 70 : lineY;
+    links.push({d: `M${sibX(n - 1)},${busY}H${r ? trunkX : 0}`, cls: ''});
+    for (let c = 0; c < n; c++) links.push({d: `M${sibX(c)},${busY}V${r * RH - 43}`, cls: ''});
+  }
+  if (rows > 1) links.push({d: `M${trunkX},${lineY}V${(rows - 1) * RH - 70}`, cls: ''});
+  const CY = Math.max(190, (rows - 1) * RH + 190);  // children below the last row of siblings
   const partners = P[f].partners, pn = [];
   partners.forEach((r, i) => {
     const x = focusW / 2 + 40 + W / 2 + i * W;
@@ -2767,14 +2782,14 @@ function familyLayout(f) {
     const mid = pnode === pn[0] || !pnode ? (pnode ? (focusW / 2 + pnode.x - 95) / 2 : 0) : pnode.x - 95 - 10;
     let x0 = mid - (list.length - 1) * W / 2;
     if (cursor !== null && x0 < cursor) x0 = cursor;
-    list.forEach((c, i) => Object.assign(add(c), {x: x0 + i * W, y: 190}));
+    list.forEach((c, i) => Object.assign(add(c), {x: x0 + i * W, y: CY}));
     cursor = x0 + list.length * W;
     const xs = list.map(c => c.x);
-    links.push({d: `M${mid},0V120`, cls: ''});
-    links.push({d: `M${Math.min(mid, ...xs)},120H${Math.max(mid, ...xs)}`, cls: ''});
-    xs.forEach(x => links.push({d: `M${x},120V147`, cls: ''}));
+    links.push({d: `M${mid},0V${CY - 70}`, cls: ''});
+    links.push({d: `M${Math.min(mid, ...xs)},${CY - 70}H${Math.max(mid, ...xs)}`, cls: ''});
+    xs.forEach(x => links.push({d: `M${x},${CY - 70}V${CY - 43}`, cls: ''}));
   }
-  const labels = [['Grootouders', -340], ['Ouders', -170], ['', 0], ['Kinderen', 190]].filter(([, y]) => nodes.some(n => n.y === y));
+  const labels = [['Grootouders', -340], ['Ouders', -170], ['', 0], ['Kinderen', CY]].filter(([, y]) => nodes.some(n => n.y === y));
   return {nodes, links, labels};
 }
 function renderFamily(f = famFocus, push = true) {
@@ -2795,7 +2810,7 @@ function renderFamily(f = famFocus, push = true) {
         renderFamily(id);
       });
     }
-    el.className = 'card' + (n.ghost ? ' ghost' : '') + (n.focus ? ' focus' : '') + (fresh ? ' enter' : '');
+    el.className = 'card' + (n.ghost ? ' ghost' : '') + (n.focus ? ' focus' : '') + (n.id && sosa[n.id] ? ' anc' : '') + (fresh ? ' enter' : '');
     el.dataset.id = n.id || '';
     el.style.setProperty('--kc', n.id ? kc(n.id) : 'transparent');
     el.innerHTML = cardHTML(n);
